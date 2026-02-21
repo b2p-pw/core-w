@@ -9,21 +9,28 @@ param(
     [Switch]$s = $false
 )
 
+# Forçar UTF-8 para evitar caracteres estranhos (Ã¡, Ã©, etc)
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 # 1. Configurações de URL
 $B2P_BASE_URL = "https://raw.githubusercontent.com/b2p-pw/b2p/main/win"
 $W_REPO_URL   = "https://raw.githubusercontent.com/b2p-pw/w/main"
 $API_W_URL    = "https://api.github.com/repos/b2p-pw/w/contents"
 
-# 2. Tentar carregar o Core e garantir variáveis de ambiente
+# 2. Tentar carregar o Core
 $localCore = "$env:USERPROFILE\.b2p\bin\core.ps1"
 if (Test-Path $localCore) { 
     . $localCore 
 } else { 
-    $coreCode = Invoke-RestMethod -Uri "$B2P_BASE_URL/core.ps1"
-    Invoke-Expression $coreCode
+    try {
+        $coreCode = Invoke-RestMethod -Uri "$B2P_BASE_URL/core.ps1" -ErrorAction Stop
+        Invoke-Expression $coreCode
+    } catch {
+        Write-Host "Aviso: Não foi possível carregar o motor Core via Web." -ForegroundColor Yellow
+    }
 }
 
-# Garantia de emergência: se as variáveis do core não carregaram, define localmente
+# Garantia de variáveis de caminho
 if (-not $B2P_BIN) {
     $B2P_HOME = Join-Path $env:USERPROFILE ".b2p"
     $B2P_BIN = Join-Path $B2P_HOME "bin"
@@ -45,11 +52,10 @@ function Show-Catalog {
     Write-Host "Buscando catálogo em w.b2p.pw..." -ForegroundColor Gray
     try {
         $items = Invoke-RestMethod -Uri $API_W_URL -UserAgent "b2p"
-        # @(...) Força o resultado a ser um Array, mesmo que venha apenas 1 item
         $apps = @($items | Where-Object { $_.type -eq "dir" -and $_.name -like "*$filter*" } | Select-Object -ExpandProperty name)
 
         if ($apps.Count -eq 0) {
-            Write-Host "Nenhum app encontrado." -ForegroundColor Yellow
+            Write-Host "Nenhum app encontrado no repositório." -ForegroundColor Yellow
         } else {
             Write-Host "`nDisponíveis para instalação:" -ForegroundColor Cyan
             for ($i = 0; $i -lt $apps.Count; $i++) {
@@ -58,18 +64,23 @@ function Show-Catalog {
         }
         Write-Host " [ Q] Voltar" -ForegroundColor Yellow
 
-        $choice = Read-Host "`nSelecione um número ou 'Q'"
+        $choice = Read-Host "`nSelecione um número"
         if ($choice -eq "Q" -or [string]::IsNullOrWhiteSpace($choice)) { return }
         
-        if ([int]::TryParse($choice, [ref]$idx) -and $idx -le $apps.Count) {
+        # Correção: Inicializar a variável antes do TryParse
+        $idx = 0
+        if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $apps.Count) {
             $selected = $apps[$idx - 1]
-            Write-Host "Iniciando instalador para $selected..." -ForegroundColor Cyan
+            Write-Host "`nIniciando instalador para $selected..." -ForegroundColor Cyan
             iex "& { $(irm "$W_REPO_URL/$selected/i.s") } -v latest"
-            Read-Host "`nPressione Enter para continuar"
+            Read-Host "`nPressione Enter para continuar..."
+        } else {
+            Write-Host "Seleção inválida." -ForegroundColor Red
+            Start-Sleep -Seconds 1
         }
     } catch {
         Write-Host "Erro ao acessar o catálogo: $_" -ForegroundColor Red
-        Pause
+        Read-Host "`nPressione Enter para continuar..."
     }
 }
 
@@ -77,13 +88,13 @@ function Manage-Installed {
     Show-Header
     if (-not (Test-Path $B2P_APPS)) { 
         Write-Host "Nenhum app instalado." -ForegroundColor Yellow
-        Pause; return 
+        Read-Host "`nPressione Enter para continuar..."; return 
     }
     
     $installedApps = @(Get-ChildItem $B2P_APPS -Directory)
     if ($installedApps.Count -eq 0) {
         Write-Host "Nenhum aplicativo instalado via b2p." -ForegroundColor Yellow
-        Pause; return
+        Read-Host "`nPressione Enter para continuar..."; return
     }
 
     Write-Host "`nAplicativos Instalados:" -ForegroundColor Cyan
@@ -93,8 +104,10 @@ function Manage-Installed {
     Write-Host " [ Q] Voltar" -ForegroundColor Yellow
 
     $choice = Read-Host "`nSelecione um app"
-    if ($choice -eq "Q") { return }
-    if ([int]::TryParse($choice, [ref]$idx) -and $idx -le $installedApps.Count) {
+    if ($choice -eq "Q" -or [string]::IsNullOrWhiteSpace($choice)) { return }
+    
+    $idx = 0
+    if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $installedApps.Count) {
         $app = $installedApps[$idx - 1].Name
         $versions = @(Get-ChildItem (Join-Path $B2P_APPS $app) -Directory | Select-Object -ExpandProperty Name)
         
@@ -108,12 +121,16 @@ function Manage-Installed {
 
         switch (Read-Host "`nOpção") {
             "1" {
-                $ver = Read-Host "Versão para tornar padrão"
+                $ver = Read-Host "Digite a versão desejada"
                 if ($versions -contains $ver) { 
                     $source = Join-Path $B2P_TELEPORTS "$app-v$ver.bat"
-                    Copy-Item $source (Join-Path $B2P_TELEPORTS "$app.bat") -Force
-                    Write-Host "Sucesso!" -ForegroundColor Green
-                }
+                    if (Test-Path $source) {
+                        Copy-Item $source (Join-Path $B2P_TELEPORTS "$app.bat") -Force
+                        Write-Host "Sucesso!" -ForegroundColor Green
+                    } else {
+                        Write-Host "Teleporte v$ver não encontrado." -ForegroundColor Red
+                    }
+                } else { Write-Host "Versão não encontrada." -ForegroundColor Red }
             }
             "2" { iex "& { $(irm "$W_REPO_URL/$app/up.s") }" }
             "3" { 
@@ -121,7 +138,7 @@ function Manage-Installed {
                 iex "& { $(irm "$W_REPO_URL/$app/un.s") } -v $ver"
             }
         }
-        Pause
+        Read-Host "`nPressione Enter para continuar..."
     }
 }
 
@@ -135,33 +152,36 @@ function Setup-B2P-Self {
     }
 
     $b2pBat = Join-Path $B2P_SHIMS "b2p.bat"
-    
     if (Test-Path $b2pBat) { Set-ItemProperty $b2pBat -Name IsReadOnly -Value $false }
     
     Write-Host "Baixando componentes..." -ForegroundColor Gray
-    Invoke-WebRequest "$B2P_BASE_URL/core.ps1" -OutFile (Join-Path $B2P_BIN "core.ps1")
-    Invoke-WebRequest "$B2P_BASE_URL/b2p.ps1" -OutFile (Join-Path $B2P_BIN "b2p.ps1")
-    
-    Write-Host "Criando atalhos..." -ForegroundColor Gray
-    $batPath = Join-Path $B2P_BIN "b2p.ps1"
-    $content = "@echo off`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$batPath`" %*"
-    $content | Out-File $b2pBat -Encoding ASCII
-    Set-ItemProperty $b2pBat -Name IsReadOnly -Value $true
-    
-    # Atualizar PATH
-    $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $newPaths = $uPath.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries)
-    $modified = $false
-    foreach($p in @($B2P_SHIMS, $B2P_TELEPORTS)) {
-        if ($newPaths -notcontains $p) {
-            $uPath = "$uPath;$p"
-            $modified = $true
+    try {
+        Invoke-WebRequest "$B2P_BASE_URL/core.ps1" -OutFile (Join-Path $B2P_BIN "core.ps1")
+        Invoke-WebRequest "$B2P_BASE_URL/b2p.ps1" -OutFile (Join-Path $B2P_BIN "b2p.ps1")
+        
+        Write-Host "Criando atalhos..." -ForegroundColor Gray
+        $batPath = Join-Path $B2P_BIN "b2p.ps1"
+        $content = "@echo off`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$batPath`" %*"
+        $content | Out-File $b2pBat -Encoding ASCII
+        Set-ItemProperty $b2pBat -Name IsReadOnly -Value $true
+        
+        # Atualizar PATH
+        $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $pSplit = $uPath.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries)
+        $modified = $false
+        foreach($p in @($B2P_SHIMS, $B2P_TELEPORTS)) {
+            if ($pSplit -notcontains $p) {
+                $uPath = "$uPath;$p"
+                $modified = $true
+            }
         }
-    }
-    if ($modified) { [Environment]::SetEnvironmentVariable("Path", $uPath, "User") }
+        if ($modified) { [Environment]::SetEnvironmentVariable("Path", $uPath, "User") }
 
-    Write-Host "`nB2P instalado com sucesso! Reinicie o terminal." -ForegroundColor Green
-    Pause
+        Write-Host "`nB2P instalado com sucesso! Reinicie o terminal." -ForegroundColor Green
+    } catch {
+        Write-Host "Erro durante a instalação: $_" -ForegroundColor Red
+    }
+    Read-Host "`nPressione Enter para continuar..."
 }
 
 # --- ROTEAMENTO ---
@@ -182,7 +202,8 @@ while ($true) {
     Write-Host " [4] Instalar/Reparar B2P CLI"
     Write-Host " [0] Sair"
     
-    switch (Read-Host "`nEscolha") {
+    $op = Read-Host "`nEscolha"
+    switch ($op) {
         "1" { Show-Catalog }
         "2" { $q = Read-Host "Busca"; Show-Catalog -filter $q }
         "3" { Manage-Installed }
