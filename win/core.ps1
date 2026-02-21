@@ -1,5 +1,5 @@
 # core.ps1 - B2P Low-Level Engine
-$B2P_CORE_VERSION = "1.2.5" # <--- VERSÃO DO CORE
+$B2P_CORE_VERSION = "1.2.7"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
@@ -23,12 +23,12 @@ function Install-B2PApp {
     
     if ($PreInstall) { & $PreInstall }
 
-    $randomName = [guid]::NewGuid().ToString()
-    $tempFile = Join-Path $env:TEMP "$randomName.tmp"
+    $urlExt = [System.IO.Path]::GetExtension($Manifest.Url)
+    if ([string]::IsNullOrWhiteSpace($urlExt)) { $urlExt = ".zip" }
+    $tempFile = Join-Path $env:TEMP "$([guid]::NewGuid().ToString())$urlExt"
     
     if (-not $Silent) {
         Write-Host "`n[b2p] Baixando $($Manifest.Name) $Version..." -ForegroundColor Cyan
-        Import-Module BitsTransfer
         Start-BitsTransfer -Source $Manifest.Url -Destination $tempFile -Priority Foreground
     } else { Invoke-WebRequest -Uri $Manifest.Url -OutFile $tempFile }
 
@@ -37,7 +37,7 @@ function Install-B2PApp {
     
     Write-Host ">>> Extraindo arquivos..." -ForegroundColor Gray
     Expand-Archive -Path $tempFile -DestinationPath $InstallDir -Force
-    Remove-Item $tempFile
+    Remove-Item $tempFile -ErrorAction SilentlyContinue
 
     $sub = Get-ChildItem $InstallDir -Directory | Select-Object -First 1
     if ($sub -and $sub.Name -like "*$($Manifest.Name)*") {
@@ -45,24 +45,20 @@ function Install-B2PApp {
         Remove-Item $sub.FullName -Recurse -Force
     }
 
-    
-    $meta = @{
-        Name = $Manifest.Name
-        Version = $Version
-        BinPath = Join-Path $InstallDir $Manifest.RelativeBinPath
-        CoreVersion = $B2P_CORE_VERSION  # <--- Salva qual core instalou
-        InstallDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $meta = @{ 
+        Name = $Manifest.Name; Version = $Version; BinPath = Join-Path $InstallDir $Manifest.RelativeBinPath;
+        CoreVersion = $B2P_CORE_VERSION; InstallDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     }
     $meta | ConvertTo-Json | Out-File (Join-Path $InstallDir "b2p-metadata.json")
 
-    # SALVAR DESINSTALADOR LOCAL (Com nome do App fixo para evitar erro de Path Nulo)
+    # --- GERADOR DE UNINSTALL LOCAL CORRIGIDO ---
     Write-Host ">>> Gerando uninstall.ps1 local..." -ForegroundColor Gray
     $unPath = Join-Path $InstallDir "uninstall.ps1"
     $unContent = @"
-param(`$v = '$Version')
+param([String]`$Name = '$AppName', [String]`$Version = '$Version')
 `$coreUrl = 'https://raw.githubusercontent.com/b2p-pw/b2p/main/win/core.ps1'
 if (Test-Path '$B2P_BIN\core.ps1') { . '$B2P_BIN\core.ps1' } else { . { `$(irm `$coreUrl) } }
-Uninstall-B2PApp -Name '$AppName' -Version `$v
+Uninstall-B2PApp -Name `$Name -Version `$Version
 "@
     $unContent | Out-File $unPath -Encoding UTF8
 
@@ -97,12 +93,16 @@ function Uninstall-B2PApp {
     param($Name, $Version)
     $AppName = $Name.ToLower()
     $AppRoot = Join-Path $B2P_APPS $AppName
+    
+    # Se a versão for 'all', removemos o AppRoot inteiro.
+    # Se for uma versão específica, removemos apenas a pasta dela.
+    
     Write-Host "[b2p] Removendo $Name ($Version)..." -ForegroundColor Yellow
 
     # 1. Limpar Teleportes
     Get-ChildItem $B2P_TELEPORTS -Filter "$AppName*" | Remove-Item -Force -ErrorAction SilentlyContinue
 
-    # 2. Limpar Shims (Verifica o conteúdo do .bat)
+    # 2. Limpar Shims relacionados
     if (Test-Path $B2P_SHIMS) {
         Get-ChildItem $B2P_SHIMS -Filter "*.bat" | ForEach-Object {
             $content = Get-Content $_.FullName -ErrorAction SilentlyContinue
@@ -112,7 +112,7 @@ function Uninstall-B2PApp {
 
     # 3. Limpar PATH Real
     $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $newPath = $uPath.Split(';') | Where-Object { $_ -notlike "*\.b2p\apps\$AppName\*" }
+    $newPath = $uPath.Split(';', [System.StringSplitOptions]::RemoveEmptyEntries) | Where-Object { $_ -notlike "*\.b2p\apps\$AppName\*" }
     [Environment]::SetEnvironmentVariable("Path", ($newPath -join ';'), "User")
 
     # 4. Deletar arquivos

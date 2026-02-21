@@ -120,19 +120,20 @@ function Manage-Installed {
                 $pathArray = $uPath.Split(';') | Where-Object { $_ -notlike "*\.b2p\apps\$app\*" }
                 [Environment]::SetEnvironmentVariable("Path", ($pathArray -join ';'), "User")
             }
-            # Dentro do b2p.ps1, na função Manage-Installed, opção "6":
+            # Dentro do b2p.ps1, opção "6" do menu Manage-Installed:
             "6" { 
                 $ver = Read-Host "Versão específica ou 'all'"
-                # Busca desinstalador local na versão atual ou na mais recente
+                # Busca local
                 $localUn = Join-Path $B2P_APPS "$app\latest\uninstall.ps1"
                 if (-not (Test-Path $localUn)) { $localUn = Join-Path $B2P_APPS "$app\$v\uninstall.ps1" }
 
                 if (Test-Path $localUn) {
-                    powershell -NoProfile -ExecutionPolicy Bypass -File $localUn -v $ver
+                    # Executa o script local passando os parâmetros
+                    powershell -NoProfile -ExecutionPolicy Bypass -File $localUn -Name $app -Version $ver
                 } else {
-                    # Fallback Web Seguro: Passando o nome do app via string formatada
+                    # Chamada Web corrigida: O param deve vir primeiro, então injetamos os argumentos no final da string iex
                     $unUrl = "https://raw.githubusercontent.com/b2p-pw/w/main/$app/un.s"
-                    iex "& { `$appName='$app'; $(Invoke-RestMethod -Uri $unUrl) } -v $ver"
+                    iex "& { $(Invoke-RestMethod -Uri $unUrl) } -Name '$app' -Version '$ver'"
                 }
             }
         }
