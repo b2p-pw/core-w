@@ -9,6 +9,8 @@ param(
     [Switch]$s = $false
 )
 
+$B2P_CLI_VERSION = "1.4.0" # <--- VERSÃO DO CLI
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 1. Configurações de Redirecionamento
@@ -32,7 +34,7 @@ if (-not $B2P_BIN) {
 function Show-Header {
     Clear-Host
     Write-Host "========================================" -ForegroundColor Magenta
-    Write-Host "      Binary-2-Path (b2p) Manager       " -ForegroundColor White
+    Write-Host "    Binary-2-Path (b2p) CLI v$B2P_CLI_VERSION  " -ForegroundColor White
     Write-Host "========================================" -ForegroundColor Magenta
 }
 
@@ -118,7 +120,21 @@ function Manage-Installed {
                 $pathArray = $uPath.Split(';') | Where-Object { $_ -notlike "*\.b2p\apps\$app\*" }
                 [Environment]::SetEnvironmentVariable("Path", ($pathArray -join ';'), "User")
             }
-            "6" { $ver = Read-Host "Versão ou 'all'"; iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$app/un.s") } -v $ver" }
+            # Dentro do b2p.ps1, na função Manage-Installed, opção "6":
+            "6" { 
+                $ver = Read-Host "Versão específica ou 'all'"
+                # Busca desinstalador local na versão atual ou na mais recente
+                $localUn = Join-Path $B2P_APPS "$app\latest\uninstall.ps1"
+                if (-not (Test-Path $localUn)) { $localUn = Join-Path $B2P_APPS "$app\$v\uninstall.ps1" }
+
+                if (Test-Path $localUn) {
+                    powershell -NoProfile -ExecutionPolicy Bypass -File $localUn -v $ver
+                } else {
+                    # Fallback Web Seguro: Passando o nome do app via string formatada
+                    $unUrl = "https://raw.githubusercontent.com/b2p-pw/w/main/$app/un.s"
+                    iex "& { `$appName='$app'; $(Invoke-RestMethod -Uri $unUrl) } -v $ver"
+                }
+            }
         }
         Read-Host "`nProcesso concluído. Enter..."
     }
@@ -144,6 +160,10 @@ function Show-System-Tools {
                 if ($uPath -notlike "*\.b2p\teleports*") { $missing += "Teleports" }
                 if ($missing.Count -gt 0) { Write-Host "Atenção: Pastas $($missing -join ' e ') não estão no PATH!" -ForegroundColor Red }
                 else { Write-Host "Saúde do PATH: OK" -ForegroundColor Green }
+                Write-Host "`n[Doctor] Relatório de Versões:" -ForegroundColor Cyan
+                Write-Host " - b2p CLI:    $B2P_CLI_VERSION"
+                Write-Host " - b2p Core:   $B2P_CORE_VERSION"
+                Write-Host " - PowerShell: $($PSVersionTable.PSVersion)"
                 Pause
             }
             "2" {
@@ -165,7 +185,7 @@ function Show-System-Tools {
 
 function Setup-B2P-Self {
     Show-Header
-    Write-Host "Configurando B2P CLI..." -ForegroundColor Cyan
+    Write-Host "Configurando b2p CLI..." -ForegroundColor Cyan
     @($B2P_BIN, $B2P_SHIMS, $B2P_TELEPORTS, $B2P_APPS) | ForEach-Object { if (-not (Test-Path $_)) { New-Item $_ -ItemType Directory -Force | Out-Null } }
     $b2pBat = Join-Path $B2P_SHIMS "b2p.bat"
     if (Test-Path $b2pBat) { Set-ItemProperty $b2pBat -Name IsReadOnly -Value $false }
