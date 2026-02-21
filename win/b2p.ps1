@@ -4,7 +4,7 @@ param([String]$install, [String]$upgrade, [String]$default, [String]$v="latest",
 # Importar motor
 $coreUrl = "https://raw.githubusercontent.com/b2p-pw/b2p/main/win/core.ps1"
 if (Test-Path "$env:USERPROFILE\.b2p\bin\core.ps1") { . "$env:USERPROFILE\.b2p\bin\core.ps1" }
-else { . { $(irm $coreUrl) } }
+else { iex "& { $(irm '$coreUrl') }" }
 
 function Setup-B2P-Self {
     # Lógica de instalar o b2p.bat como Read-Only na pasta de shims
